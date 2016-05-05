@@ -1,6 +1,7 @@
 package com.scraping;
 
 import com.models.Venue;
+import com.utilities.DatabaseHandler;
 import org.apache.commons.lang3.StringUtils;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -15,26 +16,68 @@ import java.util.Set;
 
 /**
  * Created by Trevor on 5/5/2016.
+ *
+ * This took about 3 hours to write the scraper, the model, the database and run it enough times to deal with the scraping edge cases
  */
 public class IndieOnTheMoveScraper extends VenueScraper {
 
     public static void main(String[] args) {
-        Venue venue = scrapeVenuePage("https://www.indieonthemove.com/venues/view/miami-live-miami-florida");
-        System.out.println(venue.toString());
-//        scrape();
+//        List<Venue> venues = new ArrayList<>();
+//        venues.add(scrapeVenuePage("https://www.indieonthemove.com/venues/venues/view/502-bar-san-antonio-texas"));
+//        saveVenues(venues);
+
+        scrapeURLs();
     }
 
-    public static List<Venue> scrape() {
-
-        List<Venue> venues = new ArrayList<>();
+    public static void scrape() {
 
         try {
-
-            // gather the links to every venue
-            Set<String> venueURLs = new HashSet<>();
+            // scrape pages one at a time so we can resume where we left off if necessary
             Document document = Jsoup.connect("https://www.indieonthemove.com/venues").get();
 
             boolean morePages = true;
+            int totalDone = 0;
+            while (morePages) {
+                Set<String> venueURLs = new HashSet<>();
+                Elements venueLinks = document.select("td.venue-name a.title");
+                System.out.println("Found " + venueLinks.size() + " venue links on this page to scrape");
+                for (Element venueLink : venueLinks) {
+                    venueURLs.add("https://www.indieonthemove.com/venues" + venueLink.attr("href"));
+                }
+
+                // scrape each individual page now
+                totalDone += venueURLs.size();
+                for (String venueURL : venueURLs) {
+                    sleepBetween(1, 4);
+                    saveVenue(scrapeVenuePage(venueURL));
+                }
+
+                System.out.println("Total done so far: " + totalDone);
+
+                Elements nextButtons = document.select("li.next a[href]");
+                if (!nextButtons.isEmpty()) {
+                    sleepBetween(1, 4);
+                    System.out.println("Scraping next page at " + nextButtons.first().attr("href"));
+                    document = Jsoup.connect(nextButtons.first().attr("href")).get();
+                } else {
+                    morePages = false;
+                }
+
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    public static void scrapeURLs() {
+        try {
+            // scrape pages one at a time so we can resume where we left off if necessary
+            Document document = Jsoup.connect("https://www.indieonthemove.com/venues").get();
+
+            boolean morePages = true;
+            Set<String> venueURLs = new HashSet<>();
             while (morePages) {
                 Elements venueLinks = document.select("td.venue-name a.title");
                 System.out.println("Found " + venueLinks.size() + " venue links on this page to scrape");
@@ -44,37 +87,32 @@ public class IndieOnTheMoveScraper extends VenueScraper {
 
                 Elements nextButtons = document.select("li.next a[href]");
                 if (!nextButtons.isEmpty()) {
-                    sleepBetween(1, 4);
+                    sleepBetween(1, 3);
+                    System.out.println("Scraping next page at " + nextButtons.first().attr("href"));
                     document = Jsoup.connect(nextButtons.first().attr("href")).get();
                 } else {
                     morePages = false;
                 }
 
+                System.out.println("Found " + venueURLs.size() + " URLs so far");
             }
 
-            System.out.println("Got " + venueURLs.size() + " venue URLs to scrape");
-
-
-            // scrape each individual page now
-            for (String venueURL : venueURLs) {
-                sleepBetween(1, 4);
-                scrapeVenuePage(venueURL);
+            if (venueURLs.size() > 0) {
+                saveVenueURLs(venueURLs);
             }
+
 
         } catch (IOException e) {
             e.printStackTrace();
         }
-
-        return venues;
     }
 
     public static Venue scrapeVenuePage(String venueURL) {
         Venue venue = new Venue();
+        venue.setSource(venueURL);
         try {
 
             Document document = Jsoup.connect(venueURL).get();
-
-            venue.setSource(venueURL);
 
             // name
             Elements elements = document.select("div.venue-details div.alignleft h1");
@@ -98,6 +136,14 @@ public class IndieOnTheMoveScraper extends VenueScraper {
                         venue.setCity(addresses2[0].replace(",", ""));
                         venue.setState(addresses2[1]);
                         venue.setZip(addresses2[2]);
+                    } else if (addresses2.length > 3) {
+                        String fullCityName = "";
+                        for (int i = 0; i < addresses2.length -2; ++i) {
+                            fullCityName += addresses2[i].replace(",", "") + " ";
+                        }
+                        venue.setCity(fullCityName.trim());
+                        venue.setState(addresses2[addresses2.length - 2]);
+                        venue.setZip(addresses2[addresses2.length -1]);
                     }
                 }
             }
@@ -126,7 +172,7 @@ public class IndieOnTheMoveScraper extends VenueScraper {
             }
 
             // capacity
-            elements = document.select("div.venue-details div.alignleft ul li:contains(Capacity)");
+            elements = document.select("div.venue-details div.alignleft ul li:contains(Capacity:)");
             if (!elements.isEmpty()) {
                 String capacityString = elements.first().text().replace("Capacity:", "").trim();
                 try {
@@ -138,7 +184,7 @@ public class IndieOnTheMoveScraper extends VenueScraper {
             }
 
             // age
-            elements = document.select("div.venue-details div.alignleft ul li:contains(Age)");
+            elements = document.select("div.venue-details div.alignleft ul li:contains(Age:)");
             if (!elements.isEmpty()) {
                 String ageString = elements.first().text().replace("Age:", "").trim();
                 if (ageString.equals("All")) {
@@ -175,6 +221,7 @@ public class IndieOnTheMoveScraper extends VenueScraper {
             e.printStackTrace();
         }
 
+        System.out.println("Scraped: " + venue.toString());
         return venue;
     }
 }
